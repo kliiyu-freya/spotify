@@ -195,6 +195,11 @@ class SpotifyWebSocketHandler:
         msg_type = message.get("type")
         data = message.get("data", {})
 
+        if msg_type == "spotify_auth_url":
+            self.send_auth_url()
+        elif msg_type == "spotify_auth":
+            self.authenticate_spotify(data.get("callbackLink"))
+
         if not self.spotify_client.is_authenticated():
             if not self._unauthenticated_logged:
                 logger.warning("Spotify client is not authenticated. Ignoring message.")
@@ -204,11 +209,7 @@ class SpotifyWebSocketHandler:
 
         self._unauthenticated_logged = False
 
-        if msg_type == "spotify_auth_url":
-            self.send_auth_url()
-        elif msg_type == "spotify_auth":
-            self.authenticate_spotify(data.get("callbackLink"))
-        elif msg_type in ["spotify_play", "spotify_pause", "spotify_next", "spotify_previous", "spotify_mute"]:
+        if msg_type in ["spotify_play", "spotify_pause", "spotify_next", "spotify_previous", "spotify_mute"]:
             self.spotify_client.control(msg_type.split("_")[1])
             self.send_current_data()
         elif msg_type == "spotify_request_update":
