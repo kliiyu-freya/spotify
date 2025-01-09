@@ -223,6 +223,7 @@ class SpotifyWebSocketHandler:
     def send_auth_url(self):
         """Send the Spotify authentication URL."""
         auth_url = self.spotify_client.auth_manager.get_authorize_url()
+        print(auth_url)
         self.ws_client.send({"type": "spotify_auth_url_response", "data": {"auth_url": auth_url}})
 
     def authenticate_spotify(self, callback_url):
