@@ -199,7 +199,7 @@ class SpotifyWebSocketHandler:
             if not self._unauthenticated_logged:
                 logger.warning("Spotify client is not authenticated. Ignoring message.")
                 self._unauthenticated_logged = True
-            self.ws_client.send({"type": "error", "message": "Spotify is not authenticated."})
+                self.ws_client.send({"type": "error", "message": "Spotify is not authenticated."})
             return
 
         self._unauthenticated_logged = False
@@ -223,6 +223,7 @@ class SpotifyWebSocketHandler:
     def send_auth_url(self):
         """Send the Spotify authentication URL."""
         auth_url = self.spotify_client.auth_manager.get_authorize_url()
+        print(auth_url)
         self.ws_client.send({"type": "spotify_auth_url_response", "data": {"auth_url": auth_url}})
 
     def authenticate_spotify(self, callback_url):
