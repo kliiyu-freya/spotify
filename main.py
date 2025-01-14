@@ -20,7 +20,7 @@ if not CLIENT_ID or not CLIENT_SECRET:
     raise RuntimeError("CLIENT_ID and CLIENT_SECRET must be set as environment variables.")
 print(f"Using CLIENT_ID: {CLIENT_ID}")
 
-REDIRECT_URI = 'https://example.org'
+REDIRECT_URI = "https://example.org"
 WS_URL = "ws://host.docker.internal:6672/ws"
 # WS_URL = "ws://localhost:6672/ws"
 SCOPE = "user-read-playback-state,user-modify-playback-state"
@@ -36,7 +36,9 @@ def handle_spotify_exception(msg=None):
             except SpotifyException as e:
                 error_msg = f"{msg}: {e}" if msg else f"SpotifyException: {e}"
                 logger.error(error_msg)
+
         return wrapper
+
     return decorator
 
 
@@ -52,7 +54,7 @@ class SpotifyClient:
         try:
             token_info = self.auth_manager.get_cached_token()
             if token_info and not self.auth_manager.is_token_expired(token_info):
-                self.sp = spotipy.Spotify(auth=token_info['access_token'])
+                self.sp = spotipy.Spotify(auth=token_info["access_token"])
                 logger.info("Initialized Spotify client from cached token.")
             else:
                 logger.info("No valid token in cache. Authentication required.")
@@ -66,7 +68,7 @@ class SpotifyClient:
         if code:
             token_info = self.auth_manager.get_access_token(code)
             with self.lock:
-                self.sp = spotipy.Spotify(auth=token_info['access_token'])
+                self.sp = spotipy.Spotify(auth=token_info["access_token"])
             logger.info("Spotify authentication successful.")
             return True
         logger.warning("Spotify authentication failed.")  # NOTE: We might never reach this line
@@ -80,9 +82,9 @@ class SpotifyClient:
         """Refresh the Spotify access token if expired."""
         token_info = self.auth_manager.cache_handler.get_cached_token()
         if self.auth_manager.is_token_expired(token_info):
-            token_info = self.auth_manager.refresh_access_token(token_info['refresh_token'])
+            token_info = self.auth_manager.refresh_access_token(token_info["refresh_token"])
             with self.lock:
-                self.sp = spotipy.Spotify(auth=token_info['access_token'])
+                self.sp = spotipy.Spotify(auth=token_info["access_token"])
             logger.info("Spotify token refreshed successfully.")
 
     @handle_spotify_exception("Error retrieving current playback data")
@@ -90,14 +92,14 @@ class SpotifyClient:
         """Retrieve current playback details."""
         with self.lock:
             playback = self.sp.current_playback()
-            if playback and playback.get('is_playing'):
-                track = playback['item']
+            if playback and playback.get("is_playing"):
+                track = playback["item"]
                 return {
-                    "song_name": track['name'],
-                    "artists": ", ".join(artist['name'] for artist in track['artists']),
-                    "cover_image": track['album']['images'][0]['url'],
-                    "track_length": track['duration_ms'],
-                    "track_progress": playback['progress_ms']
+                    "song_name": track["name"],
+                    "artists": ", ".join(artist["name"] for artist in track["artists"]),
+                    "cover_image": track["album"]["images"][0]["url"],
+                    "track_length": track["duration_ms"],
+                    "track_progress": playback["progress_ms"],
                 }
             logger.info("No track is currently playing.")
             return None
@@ -111,7 +113,7 @@ class SpotifyClient:
             "next": partial(self.sp.next_track),
             "previous": partial(self.sp.previous_track),
             "mute": partial(self.sp.volume, 0),
-            "default": lambda: logger.warning("Unknown control command.")
+            "default": lambda: logger.warning("Unknown control command."),
         }
 
     @handle_spotify_exception("Error executing Spotify command")
@@ -128,11 +130,11 @@ class SpotifyClient:
     def get_active_device(self):
         """Retrieve the currently active Spotify device."""
         devices = self.sp.devices()
-        active_device = next((device for device in devices['devices'] if device['is_active']), None)
+        active_device = next((device for device in devices["devices"] if device["is_active"]), None)
         if not active_device:
             logger.warning("No active Spotify device found.")
             return None
-        return active_device['id']
+        return active_device["id"]
 
     @handle_spotify_exception("Error setting Spotify volume")
     def set_volume(self, volume):
@@ -150,6 +152,7 @@ class SpotifyClient:
 
 class WebSocketClient:
     """Handles WebSocket communication."""
+
     def __init__(self, url):
         self.url = url
         self.ws = None
@@ -216,12 +219,14 @@ class SpotifyWebSocketHandler:
     def send_current_data_on_msg(self, msg_type):  # TODO: Name could be improved
         """Not all messages require us to send the current data, this fn will check if the message requires it"""
         # NOTE: It might be better to list messages that don't require sending the current data
-        msg_types = ["spotify_play",
-                     "spotify_pause",
-                     "spotify_next",
-                     "spotify_previous",
-                     "spotify_mute",
-                     "spotify_request_update"]
+        msg_types = [
+            "spotify_play",
+            "spotify_pause",
+            "spotify_next",
+            "spotify_previous",
+            "spotify_mute",
+            "spotify_request_update",
+        ]
         if msg_type in msg_types:
             self.send_current_data()
 
@@ -240,7 +245,7 @@ class SpotifyWebSocketHandler:
         self._unauthenticated_logged = False
 
         # Check if the message type is known before calling the handler
-        if not msg_type in self.msg_type_map:
+        if msg_type not in self.msg_type_map:
             logger.warning(f"Unknown message type: {message.get('type')}")
             return
 
