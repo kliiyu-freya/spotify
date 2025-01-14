@@ -7,7 +7,7 @@ from websocket import create_connection, WebSocketConnectionClosedException
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
-from functools import partial
+from functools import partial, wraps
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -25,6 +25,20 @@ WS_URL = "ws://host.docker.internal:6672/ws"
 # WS_URL = "ws://localhost:6672/ws"
 SCOPE = "user-read-playback-state,user-modify-playback-state"
 WS_UPDATE = "spotify_update"
+
+
+def handle_spotify_exception(msg=None):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except SpotifyException as e:
+                error_msg = f"{msg}: {e}" or f"SpotifyException: {e}"
+                logger.error(error_msg)
+        return wrapper
+    return decorator
+
 
 class SpotifyClient:
     def __init__(self, client_id, client_secret, redirect_uri, scope):
@@ -45,56 +59,48 @@ class SpotifyClient:
         except Exception as e:
             logger.error(f"Error initializing from cache: {e}")
 
+    @handle_spotify_exception("Error authenticating Spotify")
     def authenticate(self, callback_url):
         """Authenticate using the Spotify OAuth callback URL."""
-        try:
-            code = self.auth_manager.parse_response_code(callback_url)
-            if code:
-                token_info = self.auth_manager.get_access_token(code)
-                with self.lock:
-                    self.sp = spotipy.Spotify(auth=token_info['access_token'])
-                logger.info("Spotify authentication successful.")
-                return True
-        except SpotifyException as e:
-            logger.error(f"Spotify authentication error: {e}")
-        logger.warning("Spotify authentication failed.")
-        return False
+        code = self.auth_manager.parse_response_code(callback_url)
+        if code:
+            token_info = self.auth_manager.get_access_token(code)
+            with self.lock:
+                self.sp = spotipy.Spotify(auth=token_info['access_token'])
+            logger.info("Spotify authentication successful.")
+            return True
+        logger.warning("Spotify authentication failed.")  # NOTE: We might never reach this line
 
     def is_authenticated(self):
         """Check if the Spotify client is authenticated."""
         return self.sp is not None
 
+    @handle_spotify_exception("Error refreshing Spotify token")
     def refresh_token(self):
         """Refresh the Spotify access token if expired."""
-        try:
-            token_info = self.auth_manager.cache_handler.get_cached_token()
-            if self.auth_manager.is_token_expired(token_info):
-                token_info = self.auth_manager.refresh_access_token(token_info['refresh_token'])
-                with self.lock:
-                    self.sp = spotipy.Spotify(auth=token_info['access_token'])
-                logger.info("Spotify token refreshed successfully.")
-        except SpotifyException as e:
-            logger.error(f"Error refreshing Spotify token: {e}")
+        token_info = self.auth_manager.cache_handler.get_cached_token()
+        if self.auth_manager.is_token_expired(token_info):
+            token_info = self.auth_manager.refresh_access_token(token_info['refresh_token'])
+            with self.lock:
+                self.sp = spotipy.Spotify(auth=token_info['access_token'])
+            logger.info("Spotify token refreshed successfully.")
 
+    @handle_spotify_exception("Error retrieving current playback data")
     def get_current_playback_data(self):
         """Retrieve current playback details."""
         with self.lock:
-            try:
-                playback = self.sp.current_playback()
-                if playback and playback.get('is_playing'):
-                    track = playback['item']
-                    return {
-                        "song_name": track['name'],
-                        "artists": ", ".join(artist['name'] for artist in track['artists']),
-                        "cover_image": track['album']['images'][0]['url'],
-                        "track_length": track['duration_ms'],
-                        "track_progress": playback['progress_ms']
-                    }
-                logger.info("No track is currently playing.")
-                return None
-            except SpotifyException as e:
-                logger.error(f"Error retrieving playback data: {e}")
-                return None
+            playback = self.sp.current_playback()
+            if playback and playback.get('is_playing'):
+                track = playback['item']
+                return {
+                    "song_name": track['name'],
+                    "artists": ", ".join(artist['name'] for artist in track['artists']),
+                    "cover_image": track['album']['images'][0]['url'],
+                    "track_length": track['duration_ms'],
+                    "track_progress": playback['progress_ms']
+                }
+            logger.info("No track is currently playing.")
+            return None
 
     @property
     def ctrl_map(self):  # TODO: Name could be improved
@@ -108,45 +114,38 @@ class SpotifyClient:
             "default": lambda: logger.warning("Unknown control command.")
         }
 
+    @handle_spotify_exception("Error executing Spotify command")
     def control(self, command):
         """Execute playback control commands."""
         if not self.sp:
             logger.error("Spotify client is not authenticated. Cannot execute control commands.")
             return
-        try:
-            with self.lock:
-                self.ctrl_map.get(command, self.ctrl_map["default"])()
-                logger.info(f"Spotify command executed: {command}")
-        except SpotifyException as e:
-            logger.error(f"Error executing Spotify command '{command}': {e}")
-            
+        with self.lock:
+            self.ctrl_map.get(command, self.ctrl_map["default"])()
+            logger.info(f"Spotify command executed: {command}")
+
+    @handle_spotify_exception("Error fetching Spotify devices")
     def get_active_device(self):
         """Retrieve the currently active Spotify device."""
-        try:
-            devices = self.sp.devices()
-            active_device = next((device for device in devices['devices'] if device['is_active']), None)
-            if not active_device:
-                logger.warning("No active Spotify device found.")
-                return None
-            return active_device['id']
-        except SpotifyException as e:
-            logger.error(f"Error fetching devices: {e}")
-            return None    
-            
+        devices = self.sp.devices()
+        active_device = next((device for device in devices['devices'] if device['is_active']), None)
+        if not active_device:
+            logger.warning("No active Spotify device found.")
+            return None
+        return active_device['id']
+
+    @handle_spotify_exception("Error setting Spotify volume")
     def set_volume(self, volume):
         """Set the volume of the active Spotify device."""
         if not volume:
             logger.warning("Volume change was requested, but no volume provided.")
             return
-        try:
-            device_id = self.get_active_device()
-            if not device_id:
-                logger.warning("Cannot set volume without an active device.")
-                return
-            self.sp.volume(volume, device_id=device_id)
-            logger.info(f"Volume set to {volume}%")
-        except SpotifyException as e:
-            logger.error(f"Error setting volume: {e}")
+        device_id = self.get_active_device()
+        if not device_id:
+            logger.warning("Cannot set volume without an active device.")
+            return
+        self.sp.volume(volume, device_id=device_id)
+        logger.info(f"Volume set to {volume}%")
 
 
 class WebSocketClient:
