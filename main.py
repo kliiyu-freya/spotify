@@ -7,6 +7,7 @@ from websocket import create_connection, WebSocketConnectionClosedException
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
+from functools import partial
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,6 +96,18 @@ class SpotifyClient:
                 logger.error(f"Error retrieving playback data: {e}")
                 return None
 
+    @property
+    def ctrl_map(self):  # TODO: Name could be improved
+        """A dictionary of playback control functions."""
+        return {
+            "play": partial(self.sp.start_playback),
+            "pause": partial(self.sp.pause_playback),
+            "next": partial(self.sp.next_track),
+            "previous": partial(self.sp.previous_track),
+            "mute": partial(self.sp.volume, 0),
+            "default": lambda: logger.warning("Unknown control command.")
+        }
+
     def control(self, command):
         """Execute playback control commands."""
         if not self.sp:
@@ -102,16 +115,7 @@ class SpotifyClient:
             return
         try:
             with self.lock:
-                if command == "play":
-                    self.sp.start_playback()
-                elif command == "pause":
-                    self.sp.pause_playback()
-                elif command == "next":
-                    self.sp.next_track()
-                elif command == "previous":
-                    self.sp.previous_track()
-                elif command == "mute":
-                    self.sp.volume(0)
+                self.ctrl_map.get(command, self.ctrl_map["default"])()
                 logger.info(f"Spotify command executed: {command}")
         except SpotifyException as e:
             logger.error(f"Error executing Spotify command '{command}': {e}")
@@ -131,6 +135,9 @@ class SpotifyClient:
             
     def set_volume(self, volume):
         """Set the volume of the active Spotify device."""
+        if not volume:
+            logger.warning("Volume change was requested, but no volume provided.")
+            return
         try:
             device_id = self.get_active_device()
             if not device_id:
@@ -185,10 +192,39 @@ class WebSocketClient:
 
 class SpotifyWebSocketHandler:
     def __init__(self, spotify_client, ws_client):
+        self.authenticated = False
         self.spotify_client = spotify_client
         self.ws_client = ws_client
         self._unauthenticated_logged = False
         self.update_thread = None
+
+    @property
+    def msg_type_map(self):  # TODO: Name is not very descriptive
+        """Returns a dictionary of message type handlers."""
+        return {
+            "spotify_auth_url": self.send_auth_url,
+            "spotify_auth": self.authenticate_spotify,
+            "spotify_play": partial(self.spotify_client.control, "play"),
+            "spotify_pause": partial(self.spotify_client.control, "pause"),
+            "spotify_next": partial(self.spotify_client.control, "next"),
+            "spotify_previous": partial(self.spotify_client.control, "previous"),
+            "spotify_mute": partial(self.spotify_client.control, "mute"),
+            "spotify_request_update": self.send_current_data,
+            "spotify_volume": lambda data: self.spotify_client.set_volume(data.get("volume")),
+            "spotify_unmute": lambda: self.spotify_client.set_volume(50),  # TODO: arbitrary value?
+        }
+
+    def send_current_data_on_msg(self, msg_type):  # TODO: Name could be improved
+        """Not all messages require us to send the current data, this fn will check if the message requires it"""
+        # NOTE: It might be better to list messages that don't require sending the current data
+        msg_types = ["spotify_play",
+                     "spotify_pause",
+                     "spotify_next",
+                     "spotify_previous",
+                     "spotify_mute",
+                     "spotify_request_update"]
+        if msg_type in msg_types:
+            self.send_current_data()
 
     def handle_message(self, message):
         """Process a WebSocket message."""
@@ -204,21 +240,13 @@ class SpotifyWebSocketHandler:
 
         self._unauthenticated_logged = False
 
-        if msg_type == "spotify_auth_url":
-            self.send_auth_url()
-        elif msg_type == "spotify_auth":
-            self.authenticate_spotify(data.get("callbackLink"))
-        elif msg_type in ["spotify_play", "spotify_pause", "spotify_next", "spotify_previous", "spotify_mute"]:
-            self.spotify_client.control(msg_type.split("_")[1])
-            self.send_current_data()
-        elif msg_type == "spotify_request_update":
-            self.send_current_data()
-        elif msg_type == "spotify_volume":
-            volume = data.get("volume")
-            if volume is not None:
-                self.spotify_client.set_volume(volume)
-        elif msg_type == "spotify_unmute":
-            self.spotify_client.set_volume(50)
+        # Check if the message type is known before calling the handler
+        if not msg_type in self.msg_type_map:
+            logger.warning(f"Unknown message type: {message.get('type')}")
+            return
+
+        self.msg_type_map.get(msg_type)(data)
+        self.send_current_data_on_msg(msg_type)
 
     def send_auth_url(self):
         """Send the Spotify authentication URL."""
