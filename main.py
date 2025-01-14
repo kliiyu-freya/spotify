@@ -34,7 +34,7 @@ def handle_spotify_exception(msg=None):
             try:
                 return func(*args, **kwargs)
             except SpotifyException as e:
-                error_msg = f"{msg}: {e}" or f"SpotifyException: {e}"
+                error_msg = f"{msg}: {e}" if msg else f"SpotifyException: {e}"
                 logger.error(error_msg)
         return wrapper
     return decorator
